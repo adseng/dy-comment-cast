@@ -4,3 +4,8 @@ dist/
 .env.local
 scripts/page-sample.txt
 scripts/enter-response.json
+
+.idea
+.vscode
+.cursor
+.DS_Store
