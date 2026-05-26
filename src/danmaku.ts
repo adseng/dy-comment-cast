@@ -1,7 +1,6 @@
 import { gunzipSync } from 'zlib';
 import WebSocket from 'ws';
 import { appConfig } from './config';
-import { createDebugConfig, formatDebugMessage } from './debug';
 import { formatDanmakuEvent } from './events';
 import { parseMessage } from './message-parser';
 import { encodeMessage, protoTypes } from './proto';
@@ -13,8 +12,6 @@ let reconnectTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let watchdogTimer: NodeJS.Timeout | null = null;
 let lastActivityAt = 0;
-
-const debugConfig = createDebugConfig(process.env);
 
 function buildWsUrl(context: RoomContext): string {
   const now = Date.now();
@@ -82,13 +79,7 @@ function handleMessages(response: ReturnType<typeof protoTypes.Response.decode>)
 
     try {
       const event = parseMessage(message.method, message.payload);
-      if (!event) {
-        const debugMessage = formatDebugMessage(message.method, message.payload, debugConfig);
-        if (debugMessage) {
-          console.log(debugMessage);
-        }
-        continue;
-      }
+      if (!event) continue;
 
       const formatted = formatDanmakuEvent(event);
       if (formatted) {

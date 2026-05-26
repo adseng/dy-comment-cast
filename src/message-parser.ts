@@ -26,6 +26,7 @@ type MessagePayload = {
   popularity?: unknown;
   popStr?: string;
   onlineUserForAnchor?: string;
+  totalPvForAnchor?: string;
   status?: number;
 };
 
@@ -82,7 +83,10 @@ function decodeCorePayload(method: string, payload: Uint8Array): MessagePayload 
 
 export function parseMessage(method: string, payload: Uint8Array): DanmakuEvent | null {
   const message = decodeCorePayload(method, payload);
-  if (!message) return null;
+  if (!message) {
+    console.log(`[未处理消息] ${method}`);
+    return null;
+  }
 
   switch (method) {
     case 'WebcastChatMessage': {
@@ -113,8 +117,8 @@ export function parseMessage(method: string, payload: Uint8Array): DanmakuEvent 
       return display ? { type: 'roomStats', display } : null;
     }
     case 'WebcastRoomUserSeqMessage': {
-      const current = firstText(message.totalUserStr, message.onlineUserForAnchor, message.totalUser);
-      const total = firstText(message.totalStr, message.total, message.popularity, message.popStr);
+      const current = firstText(message.onlineUserForAnchor, message.totalUser);
+      const total = firstText(message.totalPvForAnchor, message.totalStr, message.totalUserStr);
       return current || total ? { type: 'roomStats', current, total } : null;
     }
     case 'WebcastControlMessage':
