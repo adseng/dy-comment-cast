@@ -1,54 +1,74 @@
-﻿# TypeScript 对接抖音直播 Webcast 弹幕
+﻿# dy-comment-cast
 
-本项目使用 `ws + protobufjs + zlib` 连接抖音直播 Webcast WebSocket，解析弹幕、礼物、点赞、进场、关注、房间统计和粉丝团消息。
+TypeScript 客户端，连接抖音直播 Webcast WebSocket，解析并输出弹幕、礼物、点赞、进场、关注、房间统计、粉丝团及下播事件。
+
+技术栈：`ws` · `protobufjs` · `zlib` · `axios`
+
+## 快速开始
+
+```bash
+pnpm install
+cp .env.example .env.local   # 填入 LIVE_ID
+pnpm dev
+```
+
+`LIVE_ID` 是直播间 URL 末尾的 `web_rid`，不是 `room_id`：
+
+```text
+https://live.douyin.com/452550646709
+                      ^^^^^^^^^^^^
+                      LIVE_ID
+```
 
 ## 运行流程
 
 ```text
 LIVE_ID
-  -> src/room.ts              获取 roomId、标题、直播状态、ttwid、userUniqueId
-  -> src/signature.ts         生成 WebSocket signature
-  -> src/danmaku.ts           建立连接、解 PushFrame、回 ack、管理重连
-  -> src/message-parser.ts    按 method 解析 payload
-  -> src/events.ts            格式化输出
+  -> room.ts           获取 ttwid、roomId、标题、直播状态
+  -> signature.ts      用 lib/sign.js 生成 WebSocket signature
+  -> danmaku.ts        建连、解 PushFrame、回 ack、心跳、超时重连
+  -> message-parser.ts 按 method 解码 payload
+  -> events.ts         格式化为控制台输出
+```
+
+连接建立后，WebSocket 二进制帧经 gzip 解压、protobuf 解码，再按 `message.method` 路由到对应业务类型。
+
+## 项目结构
+
+```text
+src/
+  main.ts              入口
+  config.ts            环境变量
+  room.ts              房间信息与 ttwid
+  signature.ts         签名生成
+  danmaku.ts           WebSocket 连接与重连
+  message-parser.ts    消息解析
+  events.ts            事件类型与输出格式
+  proto.ts             protobuf 类型加载
+proto/douyin.proto     协议定义
+lib/sign.js            抖音签名算法（VM 执行）
 ```
 
 ## 配置
 
-复制 `.env.example` 为 `.env.local`，至少配置：
+读取 `.env`，`.env.local` 覆盖同名项。必填项：
 
-```env
-LIVE_ID=你的抖音直播间 web_rid
-```
+| 变量 | 说明 |
+|------|------|
+| `LIVE_ID` | 直播间 `web_rid` |
 
-`LIVE_ID` 是直播间链接末尾的 `web_rid`，例如：
+可选项（均有默认值，见 `src/config.ts`）：
 
-```text
-https://live.douyin.com/452550646709
-```
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WEBCAST_WS_HOST` | `webcast100-ws-web-lq.douyin.com` | WebSocket 域名 |
+| `WEBCAST_SDK_VERSION` | `1.0.14-beta.0` | SDK 版本 |
+| `RECONNECT_DELAY_MS` | `3000` | 断线重连间隔（毫秒） |
+| `HEARTBEAT_INTERVAL_MS` | `5000` | 心跳间隔（毫秒） |
+| `STALE_TIMEOUT_MS` | `45000` | 无消息超时重连（毫秒） |
+| `USER_AGENT` | Chrome 140 | 请求 User-Agent |
 
-常用可选项：
-
-```env
-WEBCAST_WS_HOST=webcast100-ws-web-lq.douyin.com
-WEBCAST_SDK_VERSION=1.0.14-beta.0
-RECONNECT_DELAY_MS=3000
-HEARTBEAT_INTERVAL_MS=5000
-STALE_TIMEOUT_MS=45000
-USER_AGENT=Mozilla/5.0 ...
-DEBUG_MESSAGES=1
-DEBUG_METHODS=WebcastChatLikeMessage,WebcastRoomStatsMessage
-DEBUG_PAYLOAD_HEX=1
-```
-
-## 启动
-
-```bash
-pnpm install
-pnpm dev
-```
-
-正常输出示例：
+## 输出示例
 
 ```text
 直播间：示例直播间（room_id=...）
@@ -63,89 +83,59 @@ pnpm dev
 [关注] 小明
 [统计] 当前观看人数: 22164, 累计观看人数: 43.6万
 [粉丝团] 恭喜 安好． 成为粉丝团第289687名成员
+直播间已下播
 ```
 
-短时间没有 `[弹幕]` 不一定是异常。只要还能收到统计、点赞、进场等事件，说明 WebSocket 和 protobuf 解码链路仍然可用。
+短时间没有 `[弹幕]` 不一定是异常；只要还能收到统计、点赞、进场等事件，说明连接和解码链路正常。
 
 ## 已支持消息
 
-```text
-WebcastChatMessage        -> chat
-WebcastGiftMessage        -> gift
-WebcastLikeMessage        -> like
-WebcastChatLikeMessage    -> like
-WebcastMemberMessage      -> member
-WebcastSocialMessage      -> social
-WebcastRoomStatsMessage   -> roomStats
-WebcastRoomUserSeqMessage -> roomStats
-WebcastFansclubMessage    -> fansclub
-WebcastControlMessage     -> control
-```
+| method | 事件类型 | 输出前缀 |
+|--------|----------|----------|
+| `WebcastChatMessage` | chat | `[弹幕]` |
+| `WebcastGiftMessage` | gift | `[礼物]` |
+| `WebcastLikeMessage` | like | `[点赞]` |
+| `WebcastChatLikeMessage` | like | `[点赞]` |
+| `WebcastMemberMessage` | member | `[进场]` |
+| `WebcastSocialMessage` | social | `[关注]` |
+| `WebcastRoomStatsMessage` | roomStats | `[统计]` |
+| `WebcastRoomUserSeqMessage` | roomStats | `[统计]` |
+| `WebcastFansclubMessage` | fansclub | `[粉丝团]` |
+| `WebcastControlMessage` | control | 下播提示 |
+
+未覆盖的 method 会输出 `[未处理消息] <method>`，不代表连接失败。
 
 ## 解码流程
 
-WebSocket 收到的是 protobuf 二进制数据，不是 JSON：
+1. 按 `PushFrame` 解码 WebSocket 帧
+2. 对 `payload` 做 gzip 解压
+3. 按 `Response` 解码
+4. 遍历 `messages`，按 `method` 选择业务 message 解码
+5. 转换为 `DanmakuEvent` 并输出
+6. 若 `needAck` 为 true，回发 ack
 
-1. 按 `PushFrame` 解码。
-2. 对 `PushFrame.payload` 做 gzip 解压。
-3. 按 `Response` 解码。
-4. 遍历 `Response.messages`。
-5. 按 `message.method` 选择对应业务 message 解码。
-6. 转换为 `DanmakuEvent` 并输出。
-7. 如果 `Response.needAck` 为 true，回发 ack。
+协议细节见 [docs/数据类型.md](docs/数据类型.md)。
 
-## 调试
+## 扩展新消息类型
 
-查看所有未覆盖 method：
-
-```powershell
-$env:DEBUG_MESSAGES='1'; pnpm dev
-```
-
-只看指定 method：
-
-```powershell
-$env:DEBUG_METHODS='WebcastChatLikeMessage,WebcastRoomStatsMessage'; pnpm dev
-```
-
-输出指定 method 的 payload 前 64 字节 hex：
-
-```powershell
-$env:DEBUG_METHODS='WebcastChatLikeMessage'; $env:DEBUG_PAYLOAD_HEX='1'; pnpm dev
-```
-
-示例：
-
-```text
-[未处理消息] WebcastResidentGuestMessage
-[调试消息] WebcastChatLikeMessage payload=000102ff
-```
-
-调试输出不会打印 cookie、签名或完整 WebSocket URL。
+1. 在 `proto/douyin.proto` 添加 message 结构
+2. 在 `src/proto.ts` 暴露该类型
+3. 在 `src/message-parser.ts` 解码并映射为 `DanmakuEvent`
+4. 在 `src/events.ts` 补充输出格式
 
 ## 常见问题
 
-### 连接成功但没有弹幕
+**连接成功但没有弹幕** — 直播间无人发文本弹幕时正常，可用统计、点赞、进场等事件确认链路。
 
-直播间没人发文本弹幕时正常。可用房间统计、点赞、进场等事件确认链路是否正常。
+**出现 `[未处理消息]`** — 协议中存在尚未实现的事件类型，按需按上方步骤扩展即可。
 
-### 出现未处理消息
+**PowerShell profile warning** — `Set-PSReadLineOption` 警告来自终端配置，不影响程序运行。
 
-表示当前项目还没有覆盖该协议事件，不代表连接失败。支持新消息通常需要：
+## 脚本
 
-1. 在 `proto/douyin.proto` 增加对应 message 结构。
-2. 在 `src/proto.ts` 暴露该类型。
-3. 在 `src/message-parser.ts` 解析为 `DanmakuEvent`。
-
-### PowerShell profile warning
-
-如果终端出现 `Set-PSReadLineOption` warning，这是 PowerShell profile 输出能力问题，不影响程序运行。
-
-## 验证
-
-```bash
-pnpm build
-pnpm test
-```
-
-`pnpm test` 会先构建 TypeScript，再运行 Node 内置测试。
+| 命令 | 说明 |
+|------|------|
+| `pnpm dev` | 编译并启动 |
+| `pnpm build` | 仅编译 TypeScript |
+| `pnpm start` | 运行 `dist/main.js` |
+| `pnpm test` | 编译后运行 Node 内置测试 |
