@@ -11,9 +11,9 @@ export interface RoomContext {
 }
 
 interface RoomMetadata {
-  roomId?: string;
-  title?: string;
-  isLive?: boolean;
+  roomId: string;
+  title: string;
+  isLive: boolean;
 }
 
 function randomMsToken(length = 107): string {
@@ -31,117 +31,55 @@ function extractCookie(setCookie: string[] | undefined, name: string): string {
   return match?.[1] ?? '';
 }
 
-function parseByPatterns(html: string, patterns: RegExp[]): string | null {
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match?.[1]) return match[1];
-  }
-  return null;
-}
-
-function decodeJsonString(value: string): string {
-  try {
-    return JSON.parse(`"${value}"`) as string;
-  } catch {
-    return value;
-  }
-}
-
-function parseRoomId(html: string): string {
-  const roomId = parseByPatterns(html, [
-    /roomId\\":\\"(\d+)\\"/,
-    /"roomId":"(\d+)"/,
-  ]);
-  if (!roomId) {
-    throw new Error('页面中未找到 roomId，请确认 LIVE_ID 是否正确且直播间可访问');
-  }
-  return roomId;
-}
-
-let sessionDeviceId: string | null = null;
-
-function parseUserUniqueId(html: string): string {
-  return parseByPatterns(html, [
-    /user_unique_id\\":\\"(\d+)\\"/,
-    /"user_unique_id":"(\d+)"/,
-  ]) ?? String(7300000000000000000 + Math.floor(Math.random() * 1e14));
-}
 
 function getSessionDeviceId(html: string): string {
-  if (!sessionDeviceId) {
-    sessionDeviceId = parseUserUniqueId(html);
-  }
-  return sessionDeviceId;
+  return String(7300000000000000000 + Math.floor(Math.random() * 1e14));
 }
 
-export function resetSessionDeviceId(): void {
-  sessionDeviceId = null;
-}
-
-export function parseRoomTitle(html: string): string {
-  const title = parseByPatterns(html, [
-    /"room"\s*:\s*\{[^{}]*"id_str"\s*:\s*"\d+"[^{}]*"title"\s*:\s*"([^"]+)"/,
-    /"room"\\:\s*\{[^{}]*"id_str"\\:\\"?\d+\\"?[^{}]*"title"\\:\\"([^\\"]+)\\"/,
-    /"roomInfo"\s*:\s*\{[^{}]*"title"\s*:\s*"([^"]+)"/,
-    /"roomInfo"\\:\s*\{[^{}]*"title"\\:\\"([^\\"]+)\\"/,
-  ]);
-  return title ? decodeJsonString(title) : '未知直播间';
-}
-
-function parseIsLive(html: string): boolean {
-  const liveStatus = parseByPatterns(html, [
-    /liveStatus\\":\\"([^\\"]+)\\"/,
-    /"liveStatus":"([^"]+)"/,
-  ]);
-  return liveStatus === 'normal';
-}
-
-function isLiveStatus(value: unknown): boolean | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (value === 'normal') return true;
-  if (typeof value === 'number') return value === 2 || value === 4;
-  if (typeof value === 'string') {
-    const normalized = value.trim();
-    if (normalized === 'normal') return true;
-    return normalized === '2' || normalized === '4';
-  }
-  return undefined;
-}
-
-export function parseRoomMetadataFromEnterResponse(data: unknown): RoomMetadata {
-  const payload = data as {
-    data?: {
-      data?: Array<{
-        id_str?: string;
-        id?: string | number;
-        title?: string;
-        status?: string | number;
-      }>;
-      room?: {
-        id_str?: string;
-        id?: string | number;
-        title?: string;
-        status?: string | number;
-      };
-      room_status?: string | number;
+interface WebcastRoomWebEnterResponse {
+  data: {
+    data: {
+      id_str: string;
+      status: number;
+      status_str: string;
+      title: string;
+      user_count_str: string;
+      mosaic_status_str: string;
+      admin_user_ids_str: string[];
+      live_room_mode: number;
+    }[];
+    enter_room_id: string;
+    user: {
+      id_str: string;
+      nickname: string;
+      avatar_thumb: {
+        url_list: string[];
+      }
     };
-  };
+    enter_mode: number;
+    room_status: string;
 
-  const room = payload.data?.data?.[0] ?? payload.data?.room;
-  if (!room) return {};
+  }
+}
 
+export function parseRoomMetadataFromEnterResponse(data: WebcastRoomWebEnterResponse): RoomMetadata | null {
+
+  if (data == null) {
+    return null;
+  }
+  const payload = data
   return {
-    roomId: room.id_str ?? (room.id ? String(room.id) : undefined),
-    title: room.title,
-    isLive: isLiveStatus(payload.data?.room_status) ?? isLiveStatus(room.status),
-  };
+    roomId: payload.data.enter_room_id,
+    title: payload.data.data[0].title,
+    isLive: payload.data.data[0].user_count_str === '0' ? false : true,
+  }
 }
 
 async function fetchRoomMetadata(
   session: AxiosInstance,
   liveId: string,
   ttwid: string,
-): Promise<RoomMetadata> {
+): Promise<RoomMetadata | null> {
   const params = new URLSearchParams({
     aid: '6383',
     app_name: 'douyin_web',
@@ -179,7 +117,7 @@ export async function resolveRoomContext(liveId: string): Promise<RoomContext> {
   const home = await session.get('https://live.douyin.com/');
   const ttwid = extractCookie(home.headers['set-cookie'], 'ttwid');
   if (!ttwid) {
-    throw new Error('获取 ttwid 失败，请稍后重试');
+    throw new Error('获取 ttwid 失败');
   }
 
   const page = await session.get(`https://live.douyin.com/${liveId}`, {
@@ -189,14 +127,17 @@ export async function resolveRoomContext(liveId: string): Promise<RoomContext> {
   });
 
   const html = page.data as string;
-  const metadata = await fetchRoomMetadata(session, liveId, ttwid).catch((): RoomMetadata => ({}));
+  const metadata = await fetchRoomMetadata(session, liveId, ttwid);
+  if (metadata == null) {
+    throw new Error('获取直播间信息失败');
+  }
 
   return {
     liveId,
-    roomId: metadata.roomId ?? parseRoomId(html),
+    roomId: metadata.roomId,
     userUniqueId: getSessionDeviceId(html),
     ttwid,
-    title: metadata.title ?? parseRoomTitle(html),
-    isLive: metadata.isLive ?? parseIsLive(html),
+    title: metadata.title,
+    isLive: metadata.isLive,
   };
 }
